@@ -1,0 +1,306 @@
+--- build/core/a/build-binary.mk	2013-02-05 14:38:18.741018906 -0500
++++ build/core/build-binary.mk	2013-02-05 14:40:45.530200773 -0500
+@@ -221,7 +221,7 @@ LOCAL_DEPENDENCY_DIRS :=
+ 
+ # all_source_patterns contains the list of filename patterns that correspond
+ # to source files recognized by our build system
+-all_source_extensions := .c .s .S $(LOCAL_CPP_EXTENSION)
++all_source_extensions := .c .s .S $(LOCAL_CPP_EXTENSION) .f .f90
+ all_source_patterns   := $(foreach _ext,$(all_source_extensions),%$(_ext))
+ all_cpp_patterns      := $(foreach _ext,$(LOCAL_CPP_EXTENSION),%$(_ext))
+ 
+@@ -270,6 +270,12 @@ $(foreach src,$(filter $(all_cpp_pattern
+     $(call compile-cpp-source,$(src),$(call get-object-name,$(src)))\
+ )
+ 
++# handle free-form Fortran (.f90)
++$(foreach src,$(filter %.f90,$(LOCAL_SRC_FILES)), $(call compile-f90-source,$(src)))
++
++# handle fixed form Fortran (.f)
++$(foreach src,$(filter %.f,$(LOCAL_SRC_FILES)), $(call compile-fc-source,$(src)))
++
+ #
+ # The compile-xxx-source calls updated LOCAL_OBJECTS and LOCAL_DEPENDENCY_DIRS
+ #
+--- build/core/a/default-build-commands.mk	2013-02-05 14:41:14.042818764 -0500
++++ build/core/default-build-commands.mk	2013-02-05 14:42:56.302034999 -0500
+@@ -108,6 +108,9 @@ TARGET_CFLAGS   =
+ TARGET_CXX      = $(TOOLCHAIN_PREFIX)g++
+ TARGET_CXXFLAGS = $(TARGET_CFLAGS) -fno-exceptions -fno-rtti
+ 
++TARGET_FC       = $(TOOLCHAIN_PREFIX)gfortran
++TARGET_FFLAGS   =
++
+ TARGET_LD       = $(TOOLCHAIN_PREFIX)ld
+ TARGET_LDFLAGS :=
+ 
+--- build/core/a/definitions.mk	2013-02-05 14:43:14.147421731 -0500
++++ build/core/definitions.mk	2013-02-05 14:52:06.479958070 -0500
+@@ -1482,6 +1482,94 @@ else
+ endif
+ endef
+ 
++# slightly modified version for Fortran source files
++define ev-build-fc-file
++$$(_OBJ): PRIVATE_SRC      := $$(_SRC)
++$$(_OBJ): PRIVATE_OBJ      := $$(_OBJ)
++$$(_OBJ): PRIVATE_DEPS     := $$(call host-path,$$(_OBJ).d)
++$$(_OBJ): PRIVATE_MODULE   := $$(LOCAL_MODULE)
++$$(_OBJ): PRIVATE_TEXT     := "$$(_TEXT)"
++$$(_OBJ): PRIVATE_CC       := $$(_CC)
++$$(_OBJ): PRIVATE_CFLAGS   := $$(_FLAGS)
++$$(_OBJ): $$(_SRC) $$(LOCAL_MAKEFILE) $$(NDK_APP_APPLICATION_MK)
++	@mkdir -p $$(dir $$(PRIVATE_OBJ))
++	@echo "$$(PRIVATE_TEXT)  : $$(PRIVATE_MODULE) <= $$(notdir $$(PRIVATE_SRC))"
++	$(hide) $$(PRIVATE_CC) $$(PRIVATE_CFLAGS) $$(call host-path,$$(PRIVATE_SRC)) -o $$(call host-path,$$(PRIVATE_OBJ))
++endef
++
++# This assumes the same things than ev-build-fc-file, but will handle
++# the definition of LOCAL_FILTER_ASM as well.
++define ev-build-fc-source-file
++LOCAL_DEPENDENCY_DIRS += $$(dir $$(_OBJ))
++ifndef LOCAL_FILTER_ASM
++  # Trivial case: Directly generate an object file
++  $$(eval $$(call ev-build-fc-file))
++else
++  # This is where things get hairy, we first transform
++  # the source into an assembler file, send it to the
++  # filter, then generate a final object file from it.
++  #
++
++  # First, remember the original settings and compute
++  # the location of our temporary files.
++  #
++  _ORG_SRC := $$(_SRC)
++  _ORG_OBJ := $$(_OBJ)
++  _ORG_FLAGS := $$(_FLAGS)
++  _ORG_TEXT  := $$(_TEXT)
++
++  _OBJ_ASM_ORIGINAL := $$(patsubst %.o,%.s,$$(_ORG_OBJ))
++  _OBJ_ASM_FILTERED := $$(patsubst %.o,%.filtered.s,$$(_ORG_OBJ))
++
++  # If the source file is a plain assembler file, we're going to
++  # use it directly in our filter.
++  ifneq (,$$(filter %.s,$$(_SRC)))
++    _OBJ_ASM_ORIGINAL := $$(_SRC)
++  endif
++
++  #$$(info SRC=$$(_SRC) OBJ=$$(_OBJ) OBJ_ORIGINAL=$$(_OBJ_ASM_ORIGINAL) OBJ_FILTERED=$$(_OBJ_ASM_FILTERED))
++
++  # We need to transform the source into an assembly file, instead of
++  # an object. The proper way to do that depends on the file extension.
++  #
++  # For C and C++ source files, simply replace the -c by an -S in the
++  # compilation command (this forces the compiler to generate an
++  # assembly file).
++  #
++  # For assembler templates (which end in .S), replace the -c with -E
++  # to send it to the preprocessor instead.
++  #
++  # Don't do anything for plain assembly files (which end in .s)
++  #
++  ifeq (,$$(filter %.s,$$(_SRC)))
++    _OBJ   := $$(_OBJ_ASM_ORIGINAL)
++    ifneq (,$$(filter %.S,$$(_SRC)))
++      _FLAGS := $$(patsubst -c,-E,$$(_ORG_FLAGS))
++    else
++      _FLAGS := $$(patsubst -c,-S,$$(_ORG_FLAGS))
++    endif
++    $$(eval $$(call ev-build-fc-file))
++  endif
++
++  # Next, process the assembly file with the filter
++  $$(_OBJ_ASM_FILTERED): PRIVATE_SRC    := $$(_OBJ_ASM_ORIGINAL)
++  $$(_OBJ_ASM_FILTERED): PRIVATE_DST    := $$(_OBJ_ASM_FILTERED)
++  $$(_OBJ_ASM_FILTERED): PRIVATE_FILTER := $$(LOCAL_FILTER_ASM)
++  $$(_OBJ_ASM_FILTERED): PRIVATE_MODULE := $$(LOCAL_MODULE)
++  $$(_OBJ_ASM_FILTERED): $$(_OBJ_ASM_ORIGINAL)
++	@echo "AsmFilter      : $$(PRIVATE_MODULE) <= $$(notdir $$(PRIVATE_SRC))"
++	$(hide) $$(PRIVATE_FILTER) $$(PRIVATE_SRC) $$(PRIVATE_DST)
++
++  # Then, generate the final object, we need to keep assembler-specific
++  # flags which look like -Wa,<option>:
++  _SRC   := $$(_OBJ_ASM_FILTERED)
++  _OBJ   := $$(_ORG_OBJ)
++  _FLAGS := $$(filter -Wa%,$$(_ORG_FLAGS)) -c
++  _TEXT  := "Assembly     "
++  $$(eval $$(call ev-build-fc-file))
++endif
++endef
++
+ # -----------------------------------------------------------------------------
+ # Template  : ev-compile-c-source
+ # Arguments : 1: single C source file name (relative to LOCAL_PATH)
+@@ -1570,6 +1658,46 @@ endef
+ # -----------------------------------------------------------------------------
+ compile-cpp-source = $(eval $(call ev-compile-cpp-source,$1,$2))
+ 
++# Template  : ev-compile-fc-source
++# Arguments : 1: single Fortran source file name (relative to LOCAL_PATH)
++#             2: target object file (without path)
++# Returns   : None
++# Usage     : $(eval $(call ev-compile-fc-source,<srcfile>,<objfile>)
++# Rationale : Internal template evaluated by compile-fc-source
++# -----------------------------------------------------------------------------
++
++define  ev-compile-fc-source
++_SRC:=$$(LOCAL_PATH)/$(1)
++_OBJ:=$$(LOCAL_OBJS_DIR)/$(2)
++_FLAGS := $$($$(my)FFLAGS) \
++          $$(call get-src-file-target-cflags,$(1)) \
++          $$(call host-c-includes, $$(LOCAL_C_INCLUDES) $$(LOCAL_PATH)) \
++ 					$$(LOCAL_CFLAGS) \
++					$$(NDK_APP_CFLAGS) \
++          $$(LOCAL_FFLAGS) \
++          $$(NDK_APP_FFLAGS) \
++          $$(call host-c-includes,$$($(my)C_INCLUDES)) \
++          -c \
++
++_CC   := $$(TARGET_FC)
++_TEXT := "Compile-fortran $$(call get-src-file-text,$1)"
++
++$$(eval $$(call ev-build-fc-source-file))
++endef
++
++# -----------------------------------------------------------------------------
++# Function  : compile-fc-source
++# Arguments : 1: single Fortran source file name (relative to LOCAL_PATH)
++# Returns   : None
++# Usage     : $(call compile-fc-source,<srcfile>)
++# Rationale : Setup everything required to build a single Fortran source file
++# -----------------------------------------------------------------------------
++compile-fc-source = $(eval $(call ev-compile-fc-source,$1,$(1:%.f=%.o)))
++compile-f90-source = $(eval $(call ev-compile-fc-source,$1,$(1:%.f90=%.o)))
++
++
++# -----------------------------------------------------------------------------
++
+ #
+ #  Module imports
+ #
+--- build/tools/a/build-mingw64-toolchain.sh	2013-02-05 14:20:06.666327668 -0500
++++ build/tools/build-mingw64-toolchain.sh	2013-02-05 14:22:07.613953261 -0500
+@@ -610,7 +610,7 @@ var_append GCC_CONFIGURE_OPTIONS "--targ
+ if [ "$TARGET_MULTILIBS" ]; then
+     var_append GCC_CONFIGURE_OPTIONS "--enable-targets=all"
+ fi
+-var_append GCC_CONFIGURE_OPTIONS "--enable-languages=c,c++"
++var_append GCC_CONFIGURE_OPTIONS "--enable-languages=c,c++,fortran"
+ var_append GCC_CONFIGURE_OPTIONS "--with-sysroot=$INSTALL_DIR"
+ 
+ build_mingw_headers mingw-w64-headers
+--- build/tools/a/build-gcc.sh	2013-02-05 14:20:24.278710037 -0500
++++ build/tools/build-gcc.sh	2013-02-05 14:24:11.239636509 -0500
+@@ -65,6 +65,9 @@ register_var_option "--mpc-version=<vers
+ PACKAGE_DIR=
+ register_var_option "--package-dir=<path>" PACKAGE_DIR "Create archive tarball in specific directory"
+ 
++ENABLE_LANGUAGES="c,c++,fortran"
++register_var_option "--enable-languages=<name>" ENABLE_LANGUAGES "Experimental: specify which languages to build"
++
+ register_jobs_option
+ register_mingw_option
+ register_try64_option
+@@ -223,7 +226,7 @@ EXTRA_CONFIG_FLAGS="--disable-bootstrap"
+ 
+ # This is to disable GCC 4.6 specific features that don't compile well
+ # the flags are ignored for older GCC versions.
+-EXTRA_CONFIG_FLAGS=$EXTRA_CONFIG_FLAGS" --disable-libquadmath --disable-plugin"
++EXTRA_CONFIG_FLAGS=$EXTRA_CONFIG_FLAGS" --disable-libquadmath --disable-libquadmath-support --disable-plugin"
+ 
+ # Enable OpenMP
+ #EXTRA_CONFIG_FLAGS=$EXTRA_CONFIG_FLAGS" --enable-libgomp"
+@@ -231,7 +234,7 @@ EXTRA_CONFIG_FLAGS=$EXTRA_CONFIG_FLAGS"
+ # Enable Gold as default
+ case "$TOOLCHAIN" in
+     # Note that only ARM and X86 are supported
+-    x86-4.6|arm-linux-androideabi-4.6|x86-4.7|arm-linux-androideabi-4.7)
++    x86-4.6|arm-linux-androideabi-4.6|x86-4.7|x86-4.8.0|arm-linux-androideabi-4.7)
+         EXTRA_CONFIG_FLAGS=$EXTRA_CONFIG_FLAGS" --enable-gold=default"
+     ;;
+ esac
+@@ -252,7 +255,11 @@ $BUILD_SRCDIR/configure --target=$ABI_CO
+                         --with-gcc-version=$GCC_VERSION \
+                         --with-gdb-version=$GDB_VERSION \
+                         --with-gxx-include-dir=$TOOLCHAIN_BUILD_PREFIX/include/c++/$GCC_VERSION \
+-                        --with-bugurl=$DEFAULT_ISSUE_TRACKER_URL \
++                        --enable-languages=$ENABLE_LANGUAGES \
++                        --disable-libgomp \
++                        --disable-tls \
++                        --disable-libitm \
++                        --disable-libatomic \
+                         $EXTRA_CONFIG_FLAGS \
+                         $ABI_CONFIGURE_EXTRA_FLAGS
+ if [ $? != 0 ] ; then
+--- build/tools/a/build-host-gcc.sh	2013-02-05 14:20:32.547889559 -0500
++++ build/tools/build-host-gcc.sh	2013-02-05 14:25:32.052390262 -0500
+@@ -1391,8 +1391,8 @@ build_host_gcc_core ()
+     ARGS=$ARGS" --disable-libgomp"  # TODO: Add option to enable this
+     ARGS=$ARGS" --disable-libstdc__-v3 --disable-sjlj-exceptions"
+     ARGS=$ARGS" --disable-tls"
+-    ARGS=$ARGS" --disable-libquadmath --disable-plugin --disable-libitm --disable-bootstrap"
+-    ARGS=$ARGS" --enable-languages=c,c++"
++    ARGS=$ARGS" --disable-libquadmath --disable-libquadmath-support --disable-plugin --disable-libitm --disable-bootstrap"
++    ARGS=$ARGS" --enable-languages=c,c++,fortran"
+     ARGS=$ARGS" --disable-shared"
+     ARGS=$ARGS" --disable-nls"
+     ARGS=$ARGS" --disable-werror"
+--- build/tools/a/dev-defaults.sh	2013-02-05 14:54:28.186028925 -0500
++++ build/tools/dev-defaults.sh	2013-02-05 14:56:20.009451870 -0500
+@@ -33,11 +33,11 @@ DEFAULT_GCC_VERSION_LIST="4.6 4.7 4.4.3"
+ #
+ DEFAULT_GCC_VERSION=$(echo "$DEFAULT_GCC_VERSION_LIST" | tr ' ' '\n' | head -n 1)
+ 
+-DEFAULT_BINUTILS_VERSION=2.21
+-DEFAULT_GDB_VERSION=7.3.x
+-DEFAULT_MPFR_VERSION=2.4.1
++DEFAULT_BINUTILS_VERSION=2.22.90
++DEFAULT_GDB_VERSION=7.4.1
++DEFAULT_MPFR_VERSION=3.0.1
+ DEFAULT_GMP_VERSION=5.0.5
+-DEFAULT_MPC_VERSION=0.8.1
++DEFAULT_MPC_VERSION=1.0
+ 
+ # Default platform to build target binaries against.
+ DEFAULT_PLATFORM=android-9
+--- src/build/a/configure	2013-02-05 14:33:11.930366512 -0500
++++ src/build/configure	2013-02-05 14:33:54.605291968 -0500
+@@ -1386,7 +1386,7 @@ case $target in
+   arm-newlib-elf)
+     BUILD_ANDROID_GCC=no
+     ;;
+-  i[3456]86-*-linux-gnu | x86_64-*-linux-gnu)
++  i[3456]86-*-linux-android | x86_64-*-linux-android)
+     BUILD_ANDROID_GCC=yes
+     ;;
+   *)
+--- src/build/a/Makefile.in	2013-02-05 14:33:11.933366577 -0500
++++ src/build/Makefile.in	2013-02-05 14:34:14.276718550 -0500
+@@ -291,7 +291,7 @@ config-target-gcc: stmp-config-target-gc
+ 
+ GCC_CONFIG_ARGS=--prefix=$(prefix) \
+ 	  --target=${cur_target} --host=${cur_host} --build=${cur_build} \
+-	  --with-gnu-as --with-gnu-ld --enable-languages=c,c++
++	  --with-gnu-as --with-gnu-ld --enable-languages=c,c++,fortran
+ 
+ # For gcc versions 4.3.0 and later, gmp and mpfr are required.
+ # Also build libgcc is a seperate sub-target in 4.3.0+.
+--- src/gcc/gcc-4.8.0/gcc/config/a/linux.h	2013-02-05 15:57:31.486082749 -0500
++++ src/gcc/gcc-4.8.0/gcc/config/linux.h	2013-02-05 15:58:42.408593983 -0500
+@@ -103,7 +103,7 @@ see the files COPYING3 and COPYING.RUNTI
+ 
+ /* Whether we have sincos that follows the GNU extension.  */
+ #undef TARGET_HAS_SINCOS
+-#define TARGET_HAS_SINCOS (OPTION_GLIBC || OPTION_BIONIC)
++/* #define TARGET_HAS_SINCOS (OPTION_GLIBC || OPTION_BIONIC) */
+ 
+ /* Whether we have Bionic libc runtime */
+ #undef TARGET_HAS_BIONIC
+--- src/gcc/gcc-4.8.0/gcc/config/a/gnu-user.h	2013-02-05 15:57:58.068649141 -0500
++++ src/gcc/gcc-4.8.0/gcc/config/gnu-user.h	2013-02-05 15:58:27.666279825 -0500
+@@ -97,4 +97,4 @@ see the files COPYING3 and COPYING.RUNTI
+ #define TARGET_POSIX_IO
+ 
+ #define TARGET_C99_FUNCTIONS 1
+-#define TARGET_HAS_SINCOS 1
++/* #define TARGET_HAS_SINCOS 1 */

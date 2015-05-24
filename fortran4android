@@ -1,0 +1,358 @@
+#!/bin/ksh
+#---------------------------------------------------------------------------
+# This script builds the GCC gfortran compiler for the latest
+# Android NDK (ARM and x86) - currently android-ndk-r8d
+#---------------------------------------------------------------------------
+#
+
+PROGNAME=${0##*/}
+TRUE=1
+FALSE=0
+DEBUG="${FALSE}"
+VERBOSE="${FALSE}"
+export TMPDIR="${TMPDIR:-/tmp}"
+TMPFILE="$TMPDIR/tmp${$}.tmp"
+VERSION=1.0
+
+function usage {
+    print ""
+    [[ "$1" != "" ]] && print "You forgot to pass $1 parameter to ${PROGNAME}."
+    print ""
+    print "Usage: ${PROGNAME} [-dvV]"
+    print ""
+    print "    Where -d =  debug mode"
+    print "          -v =  verbose mode"
+    print "          -V =  print version number and exit"
+    print ""
+}
+
+function clean_up {
+    rm -rf ${TMPFILE}
+}
+
+while getopts ":dvV" OPTION
+do
+    case "${OPTION}" in
+        'd') DEBUG="${TRUE}" ;;
+        'v') VERBOSE="${TRUE}" ;;
+        'V') print -u2 "${PROGNAME}: version ${VERSION}" && exit 1 ;;
+        '?') usage && exit 1 ;;
+    esac
+done
+
+shift $(( ${OPTIND} - 1 ))
+
+trap "clean_up" EXIT
+
+(( VERBOSE == TRUE )) && set -x
+#BINUTILS_VERSION=2.22.90
+BINUTILS_VERSION=2.25
+GMP_VERSION=5.0.5
+MPFR_VERSION=3.1.1
+MPC_VERSION=1.0.1
+GDB_VERSION=7.7
+EXPAT_VERSION=2.0.1
+ANDROID_NDK="android-ndk-r10e"
+ANDROID_NDK_VERSION="r10e"
+ANDROID_NDK_ROOT=$ANDROID_NDK
+PATCH_REPOS="./"
+# set how many jobs to use to build the toolchain
+NJOBS=8
+# turn off expat for now...
+BUILD_EXPAT="false"
+BASE_PATH=$PWD
+
+# check our OS.. only tested on Ubuntu 12.04 and Fedora 16/17
+GT=`grep -c Ubuntu /etc/issue`
+
+if [ $GT -ge 1 ]
+then
+    echo "... detected Ubuntu"
+    echo "... only tested on 12.04.. YMMV"
+    OS_TYPE="Ubuntu"
+elif [ -f /etc/redhat-release ]
+then
+    echo "... detected Redhat derived OS"
+    echo "... only tested on Fedora 16 and 17.. YMMV"
+    OS_TYPE="Redhat"
+else
+    echo "... unsupported OS type!"
+    usage && exit 1
+fi
+
+# check for 64 bit install
+OS_ARCH=`uname -p`
+
+# install dependencies
+if [ $OS_TYPE == "Ubuntu" ]
+then
+    echo "...installing dependencies"
+    sudo apt-get install subversion libncurses5-dev flex bison texinfo wget
+    # add 32 bit ncurses for gdb if not present on 64bit installs
+    if [ $OS_ARCH == "x86_64" ]
+    then
+        sudo apt-get install lib32ncurses5
+    fi
+elif [ $OS_TYPE == "Redhat" ]
+then
+    echo "...installing dependencies"
+    sudo yum install subversion ncurses-devel flex bison texinfo wget
+fi
+
+# test to make sure we're in the right place..
+if [[ "$PWD" =~ "$ANDROID_NDK" ]]
+then
+    echo "OK.. looks like we're in the right place"
+else
+    if [ -d ./$ANDROID_NDK ]
+    then
+        echo "... found NDK in current directory.. continuing"
+        cd $ANDROID_NDK
+    elif [ -f android-ndk-${ANDROID_NDK_VERSION}-linux-x86.tar.bz2 ]
+    then
+        echo "... extracting existing NDK archive"
+        tar -jxvf android-ndk-${ANDROID_NDK_VERSION}-linux-x86.tar.bz2 > /dev/null
+        cd $ANDROID_NDK
+    else
+        wget http://dl.google.com/android/ndk/android-ndk-${ANDROID_NDK_VERSION}-linux-x86.tar.bz2
+        echo "...extracting downloaded NDK archive"
+        tar -jxvf android-ndk-${ANDROID_NDK_VERSION}-linux-x86.tar.bz2 > /dev/null
+        cd $ANDROID_NDK
+    fi
+fi
+
+if [[ "$PWD" =~ "/$ANDROID_NDK" ]]
+then
+    echo "...NDK acquired.. continuing"
+    ANDROID_NDK_ROOT=$PWD
+else
+    echo "...can't get into the NDK install directory.. stopping"
+    exit 1
+fi
+
+SOURCE_PATH=$ANDROID_NDK_ROOT/src
+
+if [ -d $SOURCE_PATH ]
+then
+    echo "src directory exists.."
+else
+    echo "making src directory.."
+    mkdir $SOURCE_PATH
+fi
+
+cd $SOURCE_PATH
+
+# make sure the google toolchain build stuff is present
+
+if [ -f build/configure ]
+then
+    echo "... google build directory present.. skipping"
+else
+    echo "... getting required google build resources"
+    # don't use the latest one from google right now.. breaks things.
+    #git clone https://android.googlesource.com/toolchain/build build
+    wget https://dl.dropbox.com/u/97874334/build_tools_ndk_r6b.tgz
+    tar -zxvf build_tools_ndk_r6b.tgz >/dev/null
+fi
+
+# gcc
+#if [ -f gcc/gcc-4.8.0/configure ]
+if [ -f gcc/gcc-4.9/configure ]
+then
+    echo "... gcc source appears to be present.. skipping"
+else
+    echo "... getting gcc source (this will take a while)..."
+    svn export -r190215 svn://gcc.gnu.org/svn/gcc/trunk gcc/gcc-4.8.0 > /dev/null
+fi
+
+# binutils
+echo "setting up binutils..."
+cd $SOURCE_PATH
+if [ -d binutils ]
+then
+    echo "... binutils directory already exists"
+else
+    echo "... making binutils directory"
+    mkdir binutils
+fi
+cd binutils
+BINUTILS_ARCHIVE=binutils-$BINUTILS_VERSION.tar.bz2
+if [ -f $BINUTILS_ARCHIVE ]
+then
+    echo "... correct binutils version already present"
+else
+    echo "... downloading $BINUTILS_ARCHIVE"
+    wget http://sourceware.mirrors.tds.net/pub/sourceware.org/binutils/snapshots/$BINUTILS_ARCHIVE
+fi
+if [ -d binutils-$BINUTILS_VERSION ]
+then
+    echo "... binutils already extracted.. moving on."
+else
+    echo "... extracting binutils archive.."
+    tar -jxvf $BINUTILS_ARCHIVE >/dev/null
+fi
+
+# gdb
+echo "setting up gdb..."
+cd $SOURCE_PATH
+if [ -d gdb ]
+then
+    echo "... gdb directory already exists"
+else
+    echo "... making gdb directory"
+    mkdir gdb
+fi
+cd gdb
+GDB_ARCHIVE=gdb-$GDB_VERSION.tar.bz2
+if [ -f $GDB_ARCHIVE ]
+then
+    echo "... correct gdb version already present"
+else
+    echo "... downloading $GDB_ARCHIVE"
+    wget http://ftp.gnu.org/gnu/gdb/$GDB_ARCHIVE
+fi
+if [ -d gdb-$GDB_VERSION ]
+then
+    echo "... gdb already extracted.. moving on."
+else
+    echo "... extracting gdb archive.."
+    tar -jxvf $GDB_ARCHIVE >/dev/null
+fi
+
+# gmp
+echo "setting up gmp..."
+cd $SOURCE_PATH
+if [ -d gmp ]
+then
+    echo "... gmp directory already exists"
+else
+    echo "... making gmp directory"
+    mkdir gmp
+fi
+cd gmp
+GMP_ARCHIVE=gmp-$GMP_VERSION.tar.bz2
+if [ -f $GMP_ARCHIVE ]
+then
+    echo "... correct gmp version already present"
+else
+    echo "... downloading $GMP_ARCHIVE"
+    wget http://ftp.gnu.org/gnu/gmp/$GMP_ARCHIVE
+fi
+
+# mpc
+echo "setting up mpc..."
+cd $SOURCE_PATH
+if [ -d mpc ]
+then
+    echo "... mpc directory already exists"
+else
+    echo "... making mpc directory"
+    mkdir mpc
+fi
+cd mpc
+MPC_ARCHIVE=mpc-$MPC_VERSION.tar.gz
+if [ -f $MPC_ARCHIVE ]
+then
+    echo "... correct mpc version already present"
+else
+    echo "... downloading $MPC_ARCHIVE"
+    wget http://www.multiprecision.org/mpc/download/$MPC_ARCHIVE
+fi
+
+# mpfr
+echo "setting up mpfr..."
+cd $SOURCE_PATH
+if [ -d mpfr ]
+then
+    echo "... mpfr directory already exists"
+else
+    echo "... making mpfr directory"
+    mkdir mpfr
+fi
+cd mpfr
+MPFR_ARCHIVE=mpfr-$MPFR_VERSION.tar.bz2
+if [ -f $MPFR_ARCHIVE ]
+then
+    echo "... correct mpfr version already present"
+else
+    echo "... downloading $MPFR_ARCHIVE"
+    wget http://ftp.gnu.org/gnu/mpfr/$MPFR_ARCHIVE
+fi
+
+# expat (required by latest build scripts for gdb 7.2+)
+# for now we're going to stop here and use an older version
+# of the google build scripts that seems to work fine still
+# without dragging in expat
+# I would like to get this working eventually since the new
+# build scripts enable graphite loop optimizations
+# still no OpenMP though.. have that working sort of on my own
+# but it's not in any shape to share yet.. ;)
+
+if [ $BUILD_EXPAT == "true" ]
+then
+    echo "setting up expat..."
+    cd $SOURCE_PATH
+    if [ -d expat ]
+    then
+        echo "... expat directory already exists"
+    else
+        echo "... making expat directory"
+        mkdir expat
+    fi
+    cd expat
+    EXPAT_ARCHIVE=expat-$EXPAT_VERSION.tar.gz
+    if [ -f $EXPAT_ARCHIVE ]
+    then
+        echo "... correct expat version already present"
+    else
+        echo "... downloading $EXPAT_ARCHIVE"
+        wget http://sourceforge.net/projects/expat/files/expat/$EXPAT_VERSION/$EXPAT_ARCHIVE
+    fi
+fi
+
+# apply fortran patch
+set -x
+cd $ANDROID_NDK_ROOT
+patch -bNp0 < $PATCH_REPOS/ndk-${ANDROID_NDK_VERSION}-fortran.patch
+
+# run the build..
+
+for toolchain in arm-linux-androideabi-4.8.0 x86-4.8.0
+do
+    short_toolchain=$(echo $toolchain | sed 's/-4.8.0//')
+    cd $ANDROID_NDK_ROOT
+    if [ -d toolchains/$toolchain/prebuilt ]
+    then
+        echo "... toolchain appears to be already present.. skipping"
+    else
+        if [ $OS_ARCH == "x86_64" ]
+        then
+            ./build/tools/build-gcc.sh --try-64 $PWD/src $PWD -j$NJOBS $toolchain
+        else
+            ./build/tools/build-gcc.sh $PWD/src $PWD -j$NJOBS $toolchain
+        fi
+    fi
+
+    # copy the config files from the included 4.6 compiler
+    if [ -f toolchains/$toolchain/config.mk ]
+    then
+        echo "... toolchain config files already present.. skipping"
+    else
+        echo "... copying toolchain config files from 4.6 compiler"
+        cp toolchains/${short_toolchain}-4.6/config.mk toolchains/$toolchain/.
+        cp toolchains/${short_toolchain}-4.6/setup.mk toolchains/$toolchain/.
+        cd toolchains/$toolchain/prebuilt
+        if [ -d linux-x86_64 ]
+        then
+            echo "... symlinking 4.8.0 toolchain linux-x86_64 to linux-x86"
+            if [ -L linux-x86 ]
+            then
+                echo "... symlink already exists.. skipping"
+            else
+                ln -s linux-x86_64 linux-x86
+            fi
+        fi
+    fi
+done
+echo "Done."
+exit 0
