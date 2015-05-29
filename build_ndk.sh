@@ -35,7 +35,7 @@ NDK_TOOLCHAINS_CLANG=\
 "renderscript "
 
 OS_ARCH=`uname -p`
-export ANDROID_NDK_ROOT=/home2/thomas/aosp/NDK/android-ndk-r10e
+export ANDROID_NDK_ROOT=$HOME/NDK/android-ndk-r10e
 
 ls
 #read
