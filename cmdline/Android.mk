@@ -17,7 +17,8 @@ endif
 LOCAL_CFLAGS += -fPIE -pie -fPIC
 
 #LOCAL_STATIC_LIBRARIES := cpufeatures
-#LOCAL_STATIC_LIBRARIES += gfortran
+#LOCAL_STATIC_LIBRARIES := gfortran
+#LOCAL_SHARED_LIBRARIES := gfortran
 LOCAL_LDLIBS := -llog -lgfortran -lm
 #LOCAL_LDLIBS := -llog -lm
 

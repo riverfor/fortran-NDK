@@ -6,11 +6,12 @@
 #backup original toolchains
 #the new built toolchains will overwrite the origianl toolchains.
 
-#arm-linux-androideabi-4.8 \
-#arm-linux-androideabi-4.9 \
-#aarch64-linux-android-4.9 \
 
-NDK_TOOLCHAINS="mips64el-linux-android-4.9 "\
+NDK_TOOLCHAINS=\
+"arm-linux-androideabi-4.8 "\
+"arm-linux-androideabi-4.9 "\
+"aarch64-linux-android-4.9 "\
+"mips64el-linux-android-4.9 "\
 "mipsel-linux-android-4.8 "\
 "mipsel-linux-android-4.9 "\
 "x86-4.8 "\
