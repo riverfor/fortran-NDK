@@ -327,9 +327,9 @@ do
     else
         if [ $OS_ARCH == "x86_64" ]
         then
-            ./build/tools/build-gcc.sh --try-64 $PWD/src $PWD -j$NJOBS $toolchain
+            ./build/tools/build-gcc.sh --try-64 --mclinker $PWD/src $PWD -j$NJOBS $toolchain
         else
-            ./build/tools/build-gcc.sh $PWD/src $PWD -j$NJOBS $toolchain
+            ./build/tools/build-gcc.sh --mclinker $PWD/src $PWD -j$NJOBS $toolchain
         fi
     fi
 
