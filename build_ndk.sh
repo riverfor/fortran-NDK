@@ -102,3 +102,13 @@ done
 build_ndk $*
 #
 build_llvm $*
+
+cd $ANDROID_NDK_ROOT
+#TODO : cp llvm3.6 from origin and setup ld.mcld
+if [ -d $ANDROID_NDK_ROOT/toolchains.org/llvm-3.6 ]; then
+	if [ ! -d $ANDROID_NDK_ROOT/toolchains/llvm-3.6 ]; then
+		cp -rf $ANDROID_NDK_ROOT/toolchains.org/llvm-3.6/ $ANDROID_NDK_ROOT/toolchains/
+		./build/tools/deploy-host-mcld.sh
+	fi
+fi
+
