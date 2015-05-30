@@ -18,6 +18,11 @@ NDK_TOOLCHAINS=\
 "x86-4.9 "\
 "x86_64-4.9"
 
+LLVM_TOOLCHAINS=\
+"llvm-3.5 "\
+"llvm-3.6 "
+
+
 NDK_TOOLCHAINS_CLANG=\
 "arm-linux-androideabi-clang3.5 "\
 "arm-linux-androideabi-clang3.6 "\
@@ -31,15 +36,32 @@ NDK_TOOLCHAINS_CLANG=\
 "x86_64-clang3.6 "\
 "x86-clang3.5 "\
 "x86-clang3.6 "\
-"llvm-3.5 "\
-"llvm-3.6 "\
 "renderscript "
 
 OS_ARCH=`uname -p`
 export ANDROID_NDK_ROOT=$HOME/NDK/android-ndk-r10e
 
-ls
-#read
+function build_llvm() {
+#llvm
+for toolchain in $LLVM_TOOLCHAINS
+do
+	cd $ANDROID_NDK_ROOT
+    #if [ -d toolchains/$toolchain/prebuilt ]
+    #then
+    #    echo "... $toolchain appears to be already present.. skipping"
+    #else
+        if [ $OS_ARCH == "x86_64" ]
+        then
+            ./build/tools/build-llvm.sh --try-64 --check --mclinker -j8 `pwd`/src `pwd` $toolchain
+        else
+            ./build/tools/build-llvm.sh --check --mclinker -j8 `pwd`/src `pwd`  $toolchain
+        fi
+    #fi
+done
+}
+
+function build_ndk() {
+#tool chain
 for toolchain in $NDK_TOOLCHAINS
 do
 	cd $ANDROID_NDK_ROOT
@@ -54,6 +76,15 @@ do
             ./build/tools/build-gcc.sh `pwd`/src `pwd` -j8 $toolchain
         fi
     #fi
+    # copy the config files from the included 4.9 compiler
+    if [ -f toolchains/$toolchain/config.mk ]
+    then
+        echo "... toolchain config files already present.. skipping"
+    else
+        echo "... copying toolchain config files from 4.? compiler"
+        cp toolchains.org/${toolchain}/config.mk toolchains/$toolchain/.
+        cp toolchains.org/${toolchain}/setup.mk toolchains/$toolchain/.
+	fi
 	cd toolchains/$toolchain/prebuilt
 	if [ -d linux-x86_64 ]
 	then
@@ -66,3 +97,8 @@ do
 		fi
 	fi
 done
+}
+#
+build_ndk $*
+#
+build_llvm $*
