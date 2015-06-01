@@ -85,17 +85,6 @@ do
         cp toolchains.org/${toolchain}/config.mk toolchains/$toolchain/.
         cp toolchains.org/${toolchain}/setup.mk toolchains/$toolchain/.
 	fi
-	cd toolchains/$toolchain/prebuilt
-	if [ -d linux-x86_64 ]
-	then
-		echo "... symlinking toolchain linux-x86_64 to linux-x86"
-		if [ -L linux-x86 ]
-		then
-			echo "... symlink already exists.. skipping"
-		else
-			ln -s linux-x86_64 linux-x86
-		fi
-	fi
 done
 }
 #
